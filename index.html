@@ -125,6 +125,14 @@ body::after{
 .fi:focus{border-color:var(--accent)}
 .habits-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
 @media(max-width:500px){.habits-grid{grid-template-columns:1fr}}
+.setup-activity-list{display:flex;flex-direction:column;gap:10px}
+.setup-activity-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:center}
+.setup-mini-actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}
+.btn-inline{padding:10px 14px;background:transparent;color:var(--text);border:1px solid var(--border);border-radius:var(--rs);font-family:var(--font-u);font-weight:600;font-size:.78rem;cursor:pointer;transition:border-color .2s,color .2s,transform .15s}
+.btn-inline:hover{border-color:var(--accent);color:var(--accent);transform:translateY(-1px)}
+.btn-inline:active{transform:translateY(0)}
+.btn-inline:disabled{opacity:.45;cursor:not-allowed;transform:none;color:var(--text-3);border-color:var(--border)}
+.btn-icon{padding:10px 12px;min-width:44px;text-align:center}
 .btn-p{
   width:100%;margin-top:10px;
   padding:14px;
@@ -582,9 +590,9 @@ input[type=range]::-moz-range-thumb{
 <!-- ─── SETUP SCREEN ─── -->
 <div id="setup">
   <div class="setup-card">
-    <div class="setup-eyebrow">Habit Tracker</div>
+    <div class="setup-eyebrow">Activity Tracker</div>
     <h1 class="setup-title">Begin Your<br>60-Day Sprint</h1>
-    <p class="setup-sub">Three habits. Sixty days. Everything lives right here — no account, no cloud.</p>
+    <p class="setup-sub">Add as many activities as you want. Sixty days. Everything lives right here — no account, no cloud.</p>
 
     <div class="form-row">
       <label class="form-label">Sprint Name</label>
@@ -595,11 +603,10 @@ input[type=range]::-moz-range-thumb{
       <input class="fi" id="s-date" type="date" style="max-width:200px">
     </div>
     <div class="form-row">
-      <label class="form-label">Your Three Habits</label>
-      <div class="habits-grid">
-        <input class="fi" id="h1" type="text" value="Morning Workout" placeholder="Habit 1">
-        <input class="fi" id="h2" type="text" value="Deep Work" placeholder="Habit 2">
-        <input class="fi" id="h3" type="text" value="Healthy Eating" placeholder="Habit 3">
+      <label class="form-label">Your Activities</label>
+      <div class="setup-activity-list" id="setup-activities"></div>
+      <div class="setup-mini-actions">
+        <button class="btn-inline" type="button" onclick="addSetupActivity()">+ Add Activity</button>
       </div>
     </div>
     <button class="btn-p" onclick="beginSprint()">Begin Sprint →</button>
@@ -668,37 +675,192 @@ let activeTab = 'today';
 let modalEdits = {};
 
 const STORE_KEY = 'sprint60_v3';
+const DEFAULT_SETUP_ACTIVITIES = ['Morning Workout', 'Deep Work', 'Healthy Eating'];
+let setupActivities = [...DEFAULT_SETUP_ACTIVITIES];
 
 function loadState() {
   try {
     const raw = localStorage.getItem(STORE_KEY);
-    if (raw) { S = JSON.parse(raw); return true; }
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      S = normalizeState(parsed);
+      return true;
+    }
   } catch(e) {}
   return false;
 }
 
 function saveState() {
-  try { localStorage.setItem(STORE_KEY, JSON.stringify(S)); } catch(e) {}
+  try { localStorage.setItem(STORE_KEY, JSON.stringify(normalizeState(S))); } catch(e) {}
 }
 
 function initState(name, date, habits) {
-  S = {
+  const cleanHabits = habits.map(h => h.trim()).filter(Boolean);
+  S = normalizeState({
     sprintName: name,
     startDate: date,
-    habitNames: habits,
-    defaults: [0, 0, 0],
+    habitNames: cleanHabits,
+    defaults: Array.from({length: cleanHabits.length}, () => 0),
     days: Array.from({length: 60}, (_, i) => ({
       day: i + 1,
       status: i === 0 ? 'current' : 'future',
-      h: [null, null, null], // null = use default
+      h: Array.from({length: cleanHabits.length}, () => null),
       notes: ''
     }))
-  };
+  });
   saveState();
 }
 
 /* ═══════════════════════════════════════════
    HELPERS
+═══════════════════════════════════════════ */
+function habitCount() {
+  return Array.isArray(S.habitNames) ? S.habitNames.length : 0;
+}
+
+function emptyHabitValues() {
+  return Array.from({length: habitCount()}, () => null);
+}
+
+function normalizeDay(day, count, index) {
+  const values = Array.isArray(day?.h) ? day.h.slice(0, count) : [];
+  while (values.length < count) values.push(null);
+
+  let status = day?.status;
+  if (!['past', 'current', 'future'].includes(status)) {
+    status = index === 0 ? 'current' : 'future';
+  }
+
+  return {
+    day: typeof day?.day === 'number' ? day.day : index + 1,
+    status,
+    h: values,
+    notes: typeof day?.notes === 'string' ? day.notes : ''
+  };
+}
+
+function normalizeState(state) {
+  const names = Array.isArray(state?.habitNames)
+    ? state.habitNames.map(v => String(v || '').trim()).filter(Boolean)
+    : [];
+  const habitNames = names.length ? names : [...DEFAULT_SETUP_ACTIVITIES];
+  const count = habitNames.length;
+
+  const defaults = Array.isArray(state?.defaults) ? state.defaults.slice(0, count) : [];
+  while (defaults.length < count) defaults.push(0);
+
+  const daysSrc = Array.isArray(state?.days) ? state.days : [];
+  const days = Array.from({length: 60}, (_, i) => normalizeDay(daysSrc[i] || {}, count, i));
+
+  const currentExists = days.some(d => d.status === 'current');
+  if (!currentExists) {
+    const firstFuture = days.find(d => d.status === 'future');
+    if (firstFuture) firstFuture.status = 'current';
+  }
+  if (days.filter(d => d.status === 'current').length > 1) {
+    let seen = false;
+    days.forEach(d => {
+      if (d.status === 'current') {
+        if (!seen) seen = true;
+        else d.status = 'future';
+      }
+    });
+  }
+
+  return {
+    sprintName: String(state?.sprintName || '60-Day Sprint'),
+    startDate: state?.startDate || new Date().toISOString().split('T')[0],
+    habitNames,
+    defaults: defaults.map(v => Number.isFinite(Number(v)) ? Math.max(0, Math.min(100, Number(v))) : 0),
+    days
+  };
+}
+
+function getH(d, i) {
+  const v = d.h[i];
+  const def = S.defaults[i] ?? 0;
+  return (v !== null && v !== undefined) ? v : def;
+}
+
+function getTotal(d) {
+  const count = habitCount();
+  if (!count) return 0;
+  return S.habitNames.reduce((sum, _, i) => sum + getH(d, i), 0) / count;
+}
+
+function currentDay() {
+  return S.days.find(d => d.status === 'current') || null;
+}
+
+function fmtDate(dayNum) {
+  const base = new Date(S.startDate + 'T12:00:00');
+  base.setDate(base.getDate() + dayNum - 1);
+  return base.toLocaleDateString('en-US', {weekday:'short', month:'short', day:'numeric'});
+}
+
+function colorFor(pct) {
+  if (pct >= 67) return '#0fd68a';
+  if (pct >= 34) return '#f5a623';
+  return '#f43f5e';
+}
+
+function calcStreak() {
+  const past = S.days.filter(d => d.status === 'past').sort((a,b) => b.day - a.day);
+  let s = 0;
+  for (const d of past) { if (getTotal(d) >= 50) s++; else break; }
+  return s;
+}
+
+function countPast() {
+  return S.days.filter(d => d.status === 'past').length;
+}
+
+function sprintAvg() {
+  const past = S.days.filter(d => d.status === 'past');
+  if (!past.length) return null;
+  return past.reduce((s,d) => s + getTotal(d), 0) / past.length;
+}
+
+function setupActivityPlaceholder(i) {
+  return `Activity ${i + 1}`;
+}
+
+function renderSetupActivities() {
+  const wrap = document.getElementById('setup-activities');
+  if (!wrap) return;
+  wrap.innerHTML = setupActivities.map((name, i) => `
+    <div class="setup-activity-row">
+      <input class="fi setup-activity-input" type="text" value="${escHtml(name)}" placeholder="${setupActivityPlaceholder(i)}"
+        oninput="updateSetupActivity(${i}, this.value)">
+      <button class="btn-inline btn-icon" type="button" onclick="removeSetupActivity(${i})" ${setupActivities.length <= 1 ? 'disabled' : ''}>✕</button>
+    </div>
+  `).join('');
+}
+
+function initSetupActivities(values) {
+  const next = Array.isArray(values) ? values : DEFAULT_SETUP_ACTIVITIES;
+  setupActivities = next.map(v => String(v || '').trim());
+  if (!setupActivities.length) setupActivities = [''];
+  renderSetupActivities();
+}
+
+function addSetupActivity(value = '') {
+  setupActivities.push(value);
+  renderSetupActivities();
+}
+
+function removeSetupActivity(index) {
+  if (setupActivities.length <= 1) return;
+  setupActivities.splice(index, 1);
+  renderSetupActivities();
+}
+
+function updateSetupActivity(index, value) {
+  setupActivities[index] = value;
+}
+
+/* ═══════════════════════════════════════════
+   SETUP
 ═══════════════════════════════════════════ */
 function getH(d, i) {
   const v = d.h[i];
@@ -768,11 +930,15 @@ function svgRing(pct, size, stroke) {
 function beginSprint() {
   const name   = document.getElementById('s-name').value.trim() || '60-Day Sprint';
   const date   = document.getElementById('s-date').value || new Date().toISOString().split('T')[0];
-  const habits = [
-    document.getElementById('h1').value.trim() || 'Core Habit 1',
-    document.getElementById('h2').value.trim() || 'Core Habit 2',
-    document.getElementById('h3').value.trim() || 'Core Habit 3',
-  ];
+  const habits = Array.from(document.querySelectorAll('.setup-activity-input'))
+    .map(el => el.value.trim())
+    .filter(Boolean);
+
+  if (!habits.length) {
+    toast('Add at least one activity to begin');
+    return;
+  }
+
   initState(name, date, habits);
   showApp();
 }
@@ -865,7 +1031,7 @@ function renderToday() {
     return;
   }
 
-  const vals  = [0,1,2].map(i => getH(cd, i));
+  const vals  = S.habitNames.map((_, i) => getH(cd, i));
   const total = getTotal(cd);
 
   box.innerHTML = `
@@ -894,12 +1060,12 @@ function renderToday() {
 
       <!-- RIGHT: Sliders -->
       <div class="today-habits">
-        <div class="sec-label" style="margin-bottom:20px">Today's Habits</div>
+        <div class="sec-label" style="margin-bottom:20px">Today's Activities</div>
 
         ${vals.map((v, i) => `
           <div class="habit-row">
             <div class="habit-header">
-              <span class="habit-name">${S.habitNames[i]}</span>
+              <span class="habit-name">${escHtml(S.habitNames[i])}</span>
               <span class="habit-val" id="tv-${i}">${Math.round(v)}%</span>
             </div>
             <div class="habit-bar-wrap">
@@ -959,7 +1125,7 @@ function saveToday() {
 function resetTodayToDefault() {
   const cd = currentDay();
   if (!cd) return;
-  cd.h = [null, null, null];
+  cd.h = emptyHabitValues();
   saveState();
   renderToday();
   toast('Reset to defaults');
@@ -1031,7 +1197,7 @@ function renderGrid() {
 ═══════════════════════════════════════════ */
 function renderLog() {
   const past = S.days.filter(d => d.status === 'past');
-  const avgH = [0,1,2].map(i => past.length
+  const avgH = S.habitNames.map((_, i) => past.length
     ? past.reduce((s,d) => s + getH(d,i), 0) / past.length : 0);
   const avgT = past.length ? past.reduce((s,d) => s + getTotal(d), 0) / past.length : 0;
 
@@ -1044,9 +1210,7 @@ function renderLog() {
             <th>Day</th>
             <th>Date</th>
             <th>Status</th>
-            <th>${S.habitNames[0]}</th>
-            <th>${S.habitNames[1]}</th>
-            <th>${S.habitNames[2]}</th>
+            ${S.habitNames.map(name => `<th>${escHtml(name)}</th>`).join('')}
             <th>Daily Total</th>
           </tr>
         </thead>
@@ -1074,9 +1238,7 @@ function renderLog() {
                   <span class="s-dot" style="background:${dotCol}"></span>
                   <span style="font-size:.78rem;text-transform:capitalize">${d.status}</span>
                 </td>
-                <td>${cellVal(0)}</td>
-                <td>${cellVal(1)}</td>
-                <td>${cellVal(2)}</td>
+                ${S.habitNames.map((_, i) => `<td>${cellVal(i)}</td>`).join('')}
                 <td>${show ? `
                   <div style="display:flex;align-items:center;gap:8px">
                     <div class="mini-bar-wrap" style="width:64px">
@@ -1094,7 +1256,7 @@ function renderLog() {
         <tfoot>
           <tr class="log-avg-row">
             <td colspan="3">Average — ${past.length} logged day${past.length!==1?'s':''}</td>
-            ${[0,1,2].map(i=>`<td>${Math.round(avgH[i])}%</td>`).join('')}
+            ${avgH.map(v=>`<td>${Math.round(v)}%</td>`).join('')}
             <td>${Math.round(avgT)}%</td>
           </tr>
         </tfoot>` : ''}
@@ -1117,7 +1279,7 @@ function renderStats() {
   const streak    = calcStreak();
   const avgTotal  = past.reduce((s,d) => s + getTotal(d), 0) / past.length;
   const best      = past.reduce((b,d) => getTotal(d) > getTotal(b) ? d : b, past[0]);
-  const habitAvgs = [0,1,2].map(i => past.reduce((s,d) => s + getH(d,i), 0) / past.length);
+  const habitAvgs = S.habitNames.map((_, i) => past.reduce((s,d) => s + getH(d,i), 0) / past.length);
   const sparkData = past.slice(-20).map(d => getTotal(d));
 
   box.innerHTML = `
@@ -1145,11 +1307,11 @@ function renderStats() {
     </div>
 
     <div class="stats-section">
-      <div class="stats-section-title">Habit Breakdown</div>
-      ${[0,1,2].map(i => `
+      <div class="stats-section-title">Activity Breakdown</div>
+      ${S.habitNames.map((name, i) => `
         <div class="hab-avg-row">
           <div class="hab-avg-hdr">
-            <span>${S.habitNames[i]}</span>
+            <span>${escHtml(name)}</span>
             <span class="hab-avg-val">${Math.round(habitAvgs[i])}%</span>
           </div>
           <div class="habit-bar-wrap" style="height:7px;margin-bottom:0">
@@ -1237,15 +1399,15 @@ function renderSettings() {
       <button class="btn-s" onclick="saveSprintDetails()">Save Details</button>
     </div>
 
-    <!-- Habit Names -->
+    <!-- Activity Names -->
     <div class="card set-section">
-      <div class="set-section-title">Habit Names</div>
-      ${[0,1,2].map(i => `
+      <div class="set-section-title">Activity Names</div>
+      ${S.habitNames.map((name, i) => `
         <div class="set-row">
-          <label class="form-label">Habit ${i+1}</label>
-          <input class="fi" id="set-h${i}" type="text" value="${escHtml(S.habitNames[i])}" style="max-width:320px">
+          <label class="form-label">Activity ${i+1}</label>
+          <input class="fi" id="set-h${i}" type="text" value="${escHtml(name)}" style="max-width:320px">
         </div>`).join('')}
-      <button class="btn-s" onclick="saveHabitNames()">Save Habit Names</button>
+      <button class="btn-s" onclick="saveHabitNames()">Save Activity Names</button>
     </div>
 
     <!-- Defaults -->
@@ -1255,9 +1417,9 @@ function renderSettings() {
         These values pre-fill any day that hasn't been manually edited.
         Changing defaults affects future display of unedited days immediately.
       </p>
-      ${[0,1,2].map(i => `
+      ${S.habitNames.map((name, i) => `
         <div class="set-row">
-          <label class="form-label">${escHtml(S.habitNames[i])}</label>
+          <label class="form-label">${escHtml(name)}</label>
           <div class="def-slider-row">
             <input type="range" min="0" max="100" step="1"
               value="${S.defaults[i]}" id="def-s${i}" oninput="defSlider(${i},this.value)">
@@ -1294,7 +1456,7 @@ function defSlider(i, val) {
 }
 
 function saveDefaults() {
-  [0,1,2].forEach(i => {
+  S.habitNames.forEach((_, i) => {
     const el = document.getElementById(`def-s${i}`);
     if (el) S.defaults[i] = parseInt(el.value);
   });
@@ -1305,7 +1467,7 @@ function saveDefaults() {
 
 function applyDefaultsToAll() {
   if (!confirm('This will clear all manually entered values. Days will revert to showing default values. Continue?')) return;
-  S.days.forEach(d => d.h = [null, null, null]);
+  S.days.forEach(d => d.h = emptyHabitValues());
   saveState();
   renderAll();
   toast('All days reset to defaults');
@@ -1322,13 +1484,13 @@ function saveSprintDetails() {
 }
 
 function saveHabitNames() {
-  [0,1,2].forEach(i => {
+  S.habitNames.forEach((_, i) => {
     const el = document.getElementById(`set-h${i}`);
     if (el) S.habitNames[i] = el.value.trim() || S.habitNames[i];
   });
   saveState();
   renderAll();
-  toast('Habit names updated ✓');
+  toast('Activity names updated ✓');
 }
 
 function resetSprint() {
@@ -1356,7 +1518,7 @@ function importData() {
       try {
         const data = JSON.parse(ev.target.result);
         if (!data.days || !Array.isArray(data.days)) throw new Error('Invalid format');
-        S = data;
+        S = normalizeState(data);
         saveState();
         renderAll();
         toast('Data imported ✓');
@@ -1372,7 +1534,7 @@ function importData() {
 ═══════════════════════════════════════════ */
 function openModal(dayNum) {
   const d    = S.days[dayNum - 1];
-  const vals = [0,1,2].map(i => getH(d, i));
+  const vals = S.habitNames.map((_, i) => getH(d, i));
   const tot  = getTotal(d);
   modalEdits = {}; // reset
 
@@ -1399,10 +1561,10 @@ function openModal(dayNum) {
       </div>
     </div>
 
-    ${[0,1,2].map(i => `
-      <div class="habit-row" style="padding:16px 0;border-bottom:${i<2?'1px solid var(--border)':'none'}">
+    ${S.habitNames.map((_, i) => `
+      <div class="habit-row" style="padding:16px 0;border-bottom:${i<S.habitNames.length-1?'1px solid var(--border)':'none'}">
         <div class="habit-header">
-          <span class="habit-name" style="font-size:.875rem">${S.habitNames[i]}</span>
+          <span class="habit-name" style="font-size:.875rem">${escHtml(S.habitNames[i])}</span>
           <span class="habit-val" id="mv-${i}">${Math.round(vals[i])}%</span>
         </div>
         <div class="habit-bar-wrap">
@@ -1427,7 +1589,7 @@ function openModal(dayNum) {
 
 function modalSlider(dayNum, idx, val) {
   val = parseInt(val);
-  if (!modalEdits[dayNum]) modalEdits[dayNum] = [0,0,0].map((_,i) => getH(S.days[dayNum-1], i));
+  if (!modalEdits[dayNum]) modalEdits[dayNum] = S.habitNames.map((_,i) => getH(S.days[dayNum-1], i));
   modalEdits[dayNum][idx] = val;
 
   document.getElementById(`mv-${idx}`).textContent = val + '%';
@@ -1435,7 +1597,7 @@ function modalSlider(dayNum, idx, val) {
   bar.style.width = val + '%';
   bar.style.background = colorFor(val);
 
-  const total = (modalEdits[dayNum][0] + modalEdits[dayNum][1] + modalEdits[dayNum][2]) / 3;
+  const total = modalEdits[dayNum].reduce((sum, v) => sum + v, 0) / Math.max(modalEdits[dayNum].length, 1);
   const pctEl = document.getElementById('m-ring-pct');
   if (pctEl) { pctEl.textContent = Math.round(total) + '%'; pctEl.style.color = colorFor(total); }
 
@@ -1463,7 +1625,7 @@ function saveModal(dayNum) {
 
 function resetModal(dayNum) {
   const d = S.days[dayNum - 1];
-  d.h = [null, null, null];
+  d.h = emptyHabitValues();
   modalEdits = {};
   saveState();
   closeModal();
@@ -1525,6 +1687,8 @@ document.addEventListener('keydown', e => {
   const today = new Date().toISOString().split('T')[0];
   const sDateEl = document.getElementById('s-date');
   if (sDateEl) sDateEl.value = today;
+
+  initSetupActivities();
 
   if (loadState()) {
     showApp();
